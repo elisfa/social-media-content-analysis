@@ -1,0 +1,149 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+import xlrd
+import pandas
+
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem.porter import PorterStemmer
+from nltk.tokenize import RegexpTokenizer
+
+from nltk.stem.wordnet import WordNetLemmatizer
+
+#Read SocialBakers data - make a dataframe
+dataset = pandas.read_excel('Feed - 2020-12-09.xlsx')
+dataset.info()
+#Keep only positive interactions - we consider positive interactions only the likes
+dataset['Likes']=dataset['Total Interactions'] - dataset['Total Comments']
+df = dataset[['Content', 'Likes']].copy()
+#Create column to count words per content
+df['word_count'] = df['Content'].apply(lambda x: len(str(x).split(" ")))
+word_count = df[['Content', 'word_count']].copy()
+
+likes_count = df[['Content', 'Likes']].copy()
+freq = pandas.Series(''.join(word_count['Content']).split()).value_counts()
+#create a dataframe with the most frequent words
+frequency = freq.to_frame()
+
+#Edit the frequency dataframe
+frequency['word'] = frequency.index
+frequency= frequency.reset_index()
+frequency = frequency.drop(columns=['index'])
+
+#Create a list of stopwords to remove the, from the copy
+stop_words = set(stopwords.words("english"))
+new_words = ["http"]
+stop_words = stop_words.union(new_words)
+
+#Corpus will contain the copy lemmatized and clean
+corpus = []
+for i in range(0, 3847):
+    #Remove punctuations
+    try:
+        text = re.sub('[^a-zA-Z]', ' ', df['Content'][i])
+    except KeyError:
+        pass
+
+    #convert to lowercase
+    text = text.lower()
+
+    #remove tags
+    text = re.sub("&lt;/?.*?&gt;"," &lt;&gt; ",text)
+
+    #remove special characters and digits
+    text = re.sub("(\\d|\\W)+"," ",text)
+
+    #Convert to list fro, string
+    text = text.split()
+
+    #Stemming
+    ps=PorterStemmer()
+
+    #Lemmatisation
+    lem = WordNetLemmatizer()
+    text = [lem.lemmatize(word) for word in text if not word in stop_words]
+    text = " ".join(text)
+    corpus.append(text)
+    df['Content'][i]=text
+
+from sklearn.feature_extraction.text import CountVectorizer
+import re
+cv=CountVectorizer(max_df=0.8,stop_words=stop_words, max_features=10000, ngram_range=(1,3))
+X=cv.fit_transform(corpus)
+
+
+cv_list = list(cv.vocabulary_.keys())
+words = pandas.DataFrame(cv_list)
+words = words.rename(columns={0: "words"})
+
+
+def get_top_n_words(corpus, n=None):
+    """Function that takes the top 5000 words
+    that appear more often"""
+    vec = CountVectorizer().fit(corpus)
+    bag_of_words = vec.transform(corpus)
+    sum_words = bag_of_words.sum(axis=0)
+    words_freq = [(word, sum_words[0, idx]) for word, idx in
+                   vec.vocabulary_.items()]
+    words_freq =sorted(words_freq, key = lambda x: x[1],
+                       reverse=True)
+    return words_freq[:n]
+#Convert most freq words to dataframe for plotting bar plot
+top_words = get_top_n_words(corpus, n=5000)
+top_df = pandas.DataFrame(top_words)
+top_df.columns=["Word", "Freq"]
+
+#Most frequently occuring Bi-grams
+def get_top_n2_words(corpus, n=None):
+    """Function that takes the top 5000 two-word
+    phrases that appear more often"""
+    vec1 = CountVectorizer(ngram_range=(2,2),
+            max_features=2000).fit(corpus)
+    bag_of_words = vec1.transform(corpus)
+    sum_words = bag_of_words.sum(axis=0)
+    words_freq = [(word, sum_words[0, idx]) for word, idx in
+                  vec1.vocabulary_.items()]
+    words_freq =sorted(words_freq, key = lambda x: x[1],
+                reverse=True)
+    return words_freq[:n]
+top2_words = get_top_n2_words(corpus, n=5000)
+top2_df = pandas.DataFrame(top2_words)
+top2_df.columns=["Word", "Freq"]
+
+#Most frequently occuring Tri-grams
+def get_top_n3_words(corpus, n=None):
+    """Function that takes the top 5000 three-word
+    phrases that appear more often"""
+    vec1 = CountVectorizer(ngram_range=(3,3),
+           max_features=2000).fit(corpus)
+    bag_of_words = vec1.transform(corpus)
+    sum_words = bag_of_words.sum(axis=0)
+    words_freq = [(word, sum_words[0, idx]) for word, idx in
+                  vec1.vocabulary_.items()]
+    words_freq =sorted(words_freq, key = lambda x: x[1],
+                reverse=True)
+    return words_freq[:n]
+top3_words = get_top_n3_words(corpus, n=5000)
+top3_df = pandas.DataFrame(top3_words)
+top3_df.columns=["Word", "Freq"]
+
+frames = [top_df, top2_df, top3_df]
+copies = pandas.concat(frames)
+copies = copies.reset_index()
+frequent = copies.drop(columns=['index'])
+frequent['likes'] = 0
+
+#Find the words in copy and sum the likes to the empty column
+#of the frequent dataframe
+for i, copy in enumerate(df['Content']):
+    for x, word in enumerate(frequent['Word']):
+        if word in copy:
+            value = df['Likes'][i]
+            frequent['likes'][x]+=value
+
+#Create a column with the average
+frequent['avg'] = frequent['likes'] / frequent['Freq']
+#Save the dataframe to a csv
+frequent.to_csv('average_likes_per_keyword.csv')
